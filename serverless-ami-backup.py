@@ -13,7 +13,7 @@ globalVars['Owner']                 = "Miztiik"
 globalVars['Environment']           = "Test"
 globalVars['REGION_NAME']           = "eu-central-1"
 globalVars['tagName']               = "Serverless-AMI-Baker-Bot"
-globalVars['findNeedle']            = "AmiBackUp"
+globalVars['findNeedle']            = "AMIBackup"
 globalVars['ReplicateAMI']          = "No"
 globalVars['RetentionTag']          = "DeleteOn"
 globalVars['RetentionDays']         = "30"
@@ -41,6 +41,10 @@ logger.setLevel(logging.INFO)
 ec2_client = boto3.client('ec2')
 
 
+def boolval(v):
+    return v in ("yes", "true", "t", "1", True, 1)
+
+
 """
 If User provides different values, override defaults
 """
@@ -48,8 +52,18 @@ def setGlobalVars():
     try:
         if os.environ['ReplicateAMI']:
             globalVars['ReplicateAMI']  = os.environ['ReplicateAMI']
+    except KeyError as e:
+        logger.error("User Customization Environment variables are not set")
+        logger.error('ERROR: {0}'.format( str(e) ) )
+
+    try:
         if os.environ['RetentionDays']:
             globalVars['RetentionDays'] = os.environ['RetentionDays']
+    except KeyError as e:
+        logger.error("User Customization Environment variables are not set")
+        logger.error('ERROR: {0}'.format( str(e) ) )
+
+    try:
         if os.environ['OnlyRunningInstances']:
             globalVars['OnlyRunningInstances']  = os.environ['OnlyRunningInstances']
     except KeyError as e:
@@ -64,10 +78,10 @@ def amiBakerBot():
     imagesBaked = { 'Images':[], 'FailedAMIs':[] }
 
     # Filter for instances having the needle tag
-    FILTER_1 = {'Name': 'tag:' + globalVars['findNeedle'],  'Values': ['YES', 'Yes', 'yes']}
+    FILTER_1 = {'Name': 'tag:' + globalVars['findNeedle'],  'Values': ['true','YES', 'Yes', 'yes']}
 
     # Filter only for running instances
-    if globalVars['OnlyRunningInstances'] and globalVars['OnlyRunningInstances'] in ('YES', 'Yes', 'yes'):
+    if globalVars['OnlyRunningInstances'] and globalVars['OnlyRunningInstances'] in ('true', 'YES', 'Yes', 'yes'):
         FILTER_2 = {'Name': 'instance-state-name', 'Values': ['running']}
     else:
         FILTER_2 = {'Name': 'instance-state-name', 'Values': ['running','stopped']}
@@ -119,7 +133,9 @@ def amiBakerBot():
                 "NoDevice": ""
                 })
         except Exception as e:
-            imagesBaked['FailedAMIs'].append( {'InstanceId':instance['InstanceId'],'ERROR':str(e), 'Message':'Unable to remove root device'} )
+            imagesBaked['FailedAMIs'].append( {'InstanceId':instance['InstanceId'],
+                                                'ERROR':str(e),
+                                                'Message':'Unable to remove root device'} )
             pass
 
         try:
@@ -140,19 +156,24 @@ def amiBakerBot():
             delete_fmt = delete_date.strftime('%Y-%m-%d')
 
             # Add additional tags
-            instance['Tags'].append( { 'Key': globalVars['RetentionTag'], 'Value': delete_fmt } )
-            instance['Tags'].append( { 'Key': 'ReplicateAMI', 'Value': globalVars['ReplicateAMI'] } )
-            instance['Tags'].append( { 'Key': 'OriginalInstanceID', 'Value': instance['InstanceId']})
+            newTags = {'Tags':[]}
+            newTags['Tags'].append( { 'Key': globalVars['RetentionTag'], 'Value': delete_fmt } )
+            newTags['Tags'].append( { 'Key': 'ReplicateAMI', 'Value': globalVars['ReplicateAMI'] } )
+            newTags['Tags'].append( { 'Key': 'OriginalInstanceID', 'Value': instance['InstanceId']})
             
+
+            logger.info(newTags)
             # Prepare return message
             imagesBaked['Images'].append({'InstanceId':instance['InstanceId'], 
                                           'DeleteOn': delete_fmt,
                                           'AMI-ID':response['ImageId'],
-                                          'Tags':instance['Tags']
+                                          'Tags':newTags['Tags']
                                           }
                                          )
         except Exception as e:
-            imagesBaked['FailedAMIs'].append( {'InstanceId':instance['InstanceId'], 'ERROR':str(e), 'Message':'Unable to trigger AMI'} )
+            imagesBaked['FailedAMIs'].append( {'InstanceId':instance['InstanceId'],
+                                                'ERROR':str(e),
+                                                'Message':'Unable to trigger AMI'} )
             pass
     
     # Tag all AMIs
