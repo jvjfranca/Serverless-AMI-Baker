@@ -13,7 +13,7 @@ globalVars['Owner']                 = "Miztiik"
 globalVars['Environment']           = "Test"
 globalVars['REGION_NAME']           = "eu-central-1"
 globalVars['tagName']               = "Serverless-AMI-Baker-Bot"
-globalVars['findNeedle']            = "AMIBackup"
+globalVars['findNeedle']            = "AMIBackUp"
 globalVars['ReplicateAMI']          = "No"
 globalVars['RetentionTag']          = "DeleteOn"
 globalVars['RetentionDays']         = "30"
@@ -75,7 +75,7 @@ This function creates an AMI of *all* EC2 instances having a tag "AMIBackUp=Yes"
 """
 def amiBakerBot():
 
-    imagesBaked = { 'Images':[], 'FailedAMIs':[] }
+    imagesBaked = { 'Images':[], 'FailedAMIs':[], 'Status':{} }
 
     # Filter for instances having the needle tag
     FILTER_1 = {'Name': 'tag:' + globalVars['findNeedle'],  'Values': ['true','YES', 'Yes', 'yes']}
@@ -95,7 +95,7 @@ def amiBakerBot():
         ], [])
 
     logger.info("Number of instances to create AMI = {0}".format( len(instances)) )
-    imagesBaked['TotalImagesBaked'] = len(instances)
+    imagesBaked['Status']['TotalImages'] = len(instances)
 
     for instance in instances:
         # Check if custom 'RetentionDays' Tag is set in any of the Instances.
@@ -136,51 +136,72 @@ def amiBakerBot():
             imagesBaked['FailedAMIs'].append( {'InstanceId':instance['InstanceId'],
                                                 'ERROR':str(e),
                                                 'Message':'Unable to remove root device'} )
-            pass
+            continue
 
         try:
             response = ec2_client.create_image(InstanceId = instance['InstanceId'],
                                                Name = NameTxt,
                                                Description  = 'AMI-for-' + str(instance['InstanceId']) + '-' + datetime.datetime.now().strftime('%Y-%m-%d_%-H-%M'),
-                                               # ToDo: Not able to get only the additional disk in device mappsings
+                                               # ToDo: Not able to get only the additional disk in device mappings
                                                # BlockDeviceMappings = _BlockDeviceMappings,
                                                NoReboot = True
                                                )
+        except Exception as e:
+            imagesBaked['FailedAMIs'].append( {'InstanceId':instance['InstanceId'],
+                                                'ERROR':str(e),
+                                                'Message':'Unable to trigger AMI'} )
+            continue
 
-            logger.info("AMI created successfully")
-            temp_delete_date = datetime.date.today() + datetime.timedelta(days=retention_days)
-            temp_delete_fmt = temp_delete_date.strftime('%Y-%m-%d')
-            logger.info("Instance-id="+instance['InstanceId']+" Image-id="+response['ImageId']+" Deletion Date="+temp_delete_fmt)
-            
-            delete_date = datetime.date.today() + datetime.timedelta(days=retention_days)
-            delete_fmt = delete_date.strftime('%Y-%m-%d')
-
-            # Add additional tags
-            newTags = {'Tags':[]}
-            newTags['Tags'].append( { 'Key': globalVars['RetentionTag'], 'Value': delete_fmt } )
-            newTags['Tags'].append( { 'Key': 'ReplicateAMI', 'Value': globalVars['ReplicateAMI'] } )
-            newTags['Tags'].append( { 'Key': 'OriginalInstanceID', 'Value': instance['InstanceId']})
-            
-
-            logger.info(newTags)
-            # Prepare return message
-            imagesBaked['Images'].append({'InstanceId':instance['InstanceId'], 
+        logger.info("AMI created successfully")
+        temp_delete_date = datetime.date.today() + datetime.timedelta(days=retention_days)
+        temp_delete_fmt = temp_delete_date.strftime('%Y-%m-%d')
+        logger.info("Instance-id="+instance['InstanceId']+" Image-id="+response['ImageId']+" Deletion Date="+temp_delete_fmt)
+        
+        delete_date = datetime.date.today() + datetime.timedelta(days=retention_days)
+        delete_fmt = delete_date.strftime('%Y-%m-%d')
+        # Add additional tags
+        newTags = {'Tags':[]}
+        newTags['Tags'].append( { 'Key': globalVars['RetentionTag'], 'Value': delete_fmt } )
+        newTags['Tags'].append( { 'Key': 'ReplicateAMI', 'Value': globalVars['ReplicateAMI'] } )
+        newTags['Tags'].append( { 'Key': 'OriginalInstanceID', 'Value': instance['InstanceId']})
+        
+        logger.info(newTags)
+        # Prepare return message
+        imagesBaked['Images'].append({'InstanceId':instance['InstanceId'], 
                                           'DeleteOn': delete_fmt,
                                           'AMI-ID':response['ImageId'],
                                           'Tags':newTags['Tags']
                                           }
                                          )
-        except Exception as e:
-            imagesBaked['FailedAMIs'].append( {'InstanceId':instance['InstanceId'],
-                                                'ERROR':str(e),
-                                                'Message':'Unable to trigger AMI'} )
-            pass
-    
+
+    imagesBaked['Status']['BakedImages'] = len( imagesBaked['Images'] )
+
+    if imagesBaked['Status']['BakedImages'] < imagesBaked['Status']['TotalImages']:
+        imagesBaked['Status']['Description'] = 'Partial Success, Check logs'
+    elif imagesBaked['Status']['BakedImages'] == imagesBaked['Status']['TotalImages']:
+        imagesBaked['Status']['Description'] = 'Success'
+    else:
+        imagesBaked['Status']['Description'] = 'Failed, More Images'
     # Tag all AMIs
     for ami in imagesBaked['Images']:
         ec2_client.create_tags(Resources = [ ami['AMI-ID'] ],
                                Tags = ami['Tags']
                                )
+
+        # Get the Snapshot ID to tag it with metadata
+        account_ids = list()
+        account_ids.append( boto3.client('sts').get_caller_identity().get('Account') )
+        snapResp = ec2_client.describe_images( ImageIds = [ ami['AMI-ID'] ], Owners = account_ids )['Images'][0]
+        logger.info('Beginning to tag Snaps')
+        for dev in snapResp['BlockDeviceMappings']:
+            if 'Ebs' in dev:
+                snapTags =  ami['Tags'][:]
+                snapTags.append( {'Value': 'Snap-for-image-' + ami['AMI-ID'], 'Key': 'Name'} )
+                ec2_client.create_tags(Resources = [ dev['Ebs']['SnapshotId'] ],
+                           Tags = snapTags
+                           )
+
+
     return imagesBaked
        
 def lambda_handler(event, context):
