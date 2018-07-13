@@ -202,7 +202,7 @@ def amiBakerBot():
         for dev in snapResp['BlockDeviceMappings']:
             if 'Ebs' in dev:
                 snapTags =  ami['Tags'][:]
-                snapTags.append( {'Value': 'Snap-for-image-' + ami['AMI-ID'], 'Key': 'Name'} )
+                snapTags.append( {'Value': 'Snap-for-' + ami['AMI-ID'], 'Key': 'Name'} )
                 ec2_client.create_tags(Resources = [ dev['Ebs']['SnapshotId'] ],
                            Tags = snapTags
                            )
