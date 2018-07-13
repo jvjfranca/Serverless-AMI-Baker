@@ -13,7 +13,7 @@ globalVars['Owner']                 = "Miztiik"
 globalVars['Environment']           = "Test"
 globalVars['REGION_NAME']           = "eu-central-1"
 globalVars['tagName']               = "Serverless-AMI-Baker-Bot"
-globalVars['findNeedle']            = "AMIBackUp"
+globalVars['findNeedle']            = ""
 globalVars['ReplicateAMI']          = "No"
 globalVars['RetentionTag']          = "DeleteOn"
 globalVars['RetentionDays']         = "30"
@@ -69,6 +69,12 @@ def setGlobalVars():
     except KeyError as e:
         logger.error("User Customization Environment variables are not set")
         logger.error('ERROR: {0}'.format( str(e) ) )
+    try:
+        if os.environ['findNeedle']:
+            globalVars['findNeedle']  = os.environ['findNeedle']
+    except KeyError as e:
+        logger.error("User Customization Environment variables are not set")
+        logger.error('ERROR: {0}'.format( str(e) ) )        
 
 """
 This function creates an AMI of *all* EC2 instances having a tag "AMIBackUp=Yes"
