@@ -13,11 +13,12 @@ globalVars['Owner']                 = "Miztiik"
 globalVars['Environment']           = "Test"
 globalVars['REGION_NAME']           = "eu-central-1"
 globalVars['tagName']               = "Serverless-AMI-Baker-Bot"
-globalVars['findNeedle']            = ""
+globalVars['findNeedle']            = "AMIBackUp"
 globalVars['ReplicateAMI']          = "No"
 globalVars['RetentionTag']          = "DeleteOn"
 globalVars['RetentionDays']         = "30"
 globalVars['OnlyRunningInstances']  = "No"
+globalVars['SNSTopicArn']           = ""
 
 #ToDo
 # Accept day of week * / 0,1,2,3,4,5,6
@@ -74,7 +75,12 @@ def setGlobalVars():
             globalVars['findNeedle']  = os.environ['findNeedle']
     except KeyError as e:
         logger.error("User Customization Environment variables are not set")
-        logger.error('ERROR: {0}'.format( str(e) ) )        
+        logger.error('ERROR: {0}'.format( str(e) ) )
+    try:
+        if os.environ['SNSTopicArn']:
+            globalVars['SNSTopicArn']  = os.environ['SNSTopicArn']
+    except KeyError as e:
+        logger.error('ERROR: SNS Topic ARN is missing, Using default - {0}'.format( str(e) ) )
 
 """
 This function creates an AMI of *all* EC2 instances having a tag "AMIBackUp=Yes"
@@ -116,14 +122,16 @@ def amiBakerBot():
         except Exception as e:
             retention_days = int(globalVars['RetentionDays'])
 
-        
+        # Add additional tags
+        newTags = {'Tags':[]}
+
         # Iterate Tags to collect the instance name tag
-        NameTxt = ''
+        NameTxt = 'AMI-for-' + str(instance['InstanceId']) + '-' + datetime.datetime.now().strftime('%Y-%m-%d_%-H-%M')
         for tag in instance['Tags']:
             if tag['Key'] == 'Name' :
-                NameTxt = 'AMI-for-' + tag['Value'] + '-' + datetime.datetime.now().strftime('%Y-%m-%d_%-H-%M')
-            else:
-                NameTxt = 'AMI-for-' + str(instance['InstanceId']) + '-' + datetime.datetime.now().strftime('%Y-%m-%d_%-H-%M')
+                NameTxt = 'AMI-for-' + tag['Value'] + '-' + datetime.datetime.now().strftime('%Y-%m-%d_%-H-%M')  
+                # Set the Name tag
+                newTags['Tags'].append( { 'Key': 'Name', 'Value': tag['Value'] } )
 
         # Find all the blockdevices attached to the instance
         _BlockDeviceMappings = []
@@ -165,12 +173,11 @@ def amiBakerBot():
         
         delete_date = datetime.date.today() + datetime.timedelta(days=retention_days)
         delete_fmt = delete_date.strftime('%Y-%m-%d')
-        # Add additional tags
-        newTags = {'Tags':[]}
+
         newTags['Tags'].append( { 'Key': globalVars['RetentionTag'], 'Value': delete_fmt } )
         newTags['Tags'].append( { 'Key': 'ReplicateAMI', 'Value': globalVars['ReplicateAMI'] } )
         newTags['Tags'].append( { 'Key': 'OriginalInstanceID', 'Value': instance['InstanceId']})
-        
+
         logger.info(newTags)
         # Prepare return message
         imagesBaked['Images'].append({'InstanceId':instance['InstanceId'], 
@@ -206,13 +213,34 @@ def amiBakerBot():
                 ec2_client.create_tags(Resources = [ dev['Ebs']['SnapshotId'] ],
                            Tags = snapTags
                            )
-
-
     return imagesBaked
+
+
+def push_to_sns(imagesBaked):
+    sns_client = boto3.client('sns')
+    try:
+        response = sns_client.publish(
+        TopicArn = globalVars['SNSTopicArn'],
+        Message = json.dumps(imagesBaked),
+        Subject = imagesBaked['Status']['Description']
+        )
+        logger.info('SUCCESS: Pushed AMI Baker Results to SNS Topic')
+        return "Successfully pushed to Notification to SNS Topic"
+    except KeyError as e:
+        logger.error('ERROR: Unable to push to SNS Topic: Check [1] SNS Topic ARN is invalid, [2] IAM Role Permissions{0}'.format( str(e) ) )
+        logger.error('ERROR: {0}'.format( str(e) ) )
+
        
 def lambda_handler(event, context):
+    
     setGlobalVars()
-    return amiBakerBot()
+
+    bakerResults = amiBakerBot()
+
+    if globalVars['SNSTopicArn']:
+        push_to_sns(bakerResults)
+
+    return bakerResults
 
 if __name__ == '__main__':
     lambda_handler(None, None)
