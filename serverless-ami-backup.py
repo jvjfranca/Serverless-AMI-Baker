@@ -20,7 +20,7 @@ globalVars['RetentionDays']         = "30"
 globalVars['OnlyRunningInstances']  = "No"
 globalVars['SNSTopicArn']           = ""
 
-#ToDo
+#ToDo Features
 # Accept day of week * / 0,1,2,3,4,5,6
 globalVars['BackUpScheduledDays']   = "AutoDigiBackupSchedule"  
 #//if true then it wont reboot. If not present or set to false then it will reboot.
@@ -44,6 +44,12 @@ ec2_client = boto3.client('ec2')
 
 def boolval(v):
     return v in ("yes", "true", "t", "1", True, 1)
+
+def _dict_to_aws_tags(tags):
+    return [{'Key': key, 'Value': value} for (key, value) in tags.items() if not key.startswith('aws:')]
+
+def _aws_tags_to_dict(aws_tags):
+    return {x['Key']: x['Value'] for x in aws_tags if not x['Key'].startswith('aws:')}
 
 
 """
